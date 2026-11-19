@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>NEON MOTOR CITY ONLINE</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07111c;color:#fff;font-family:system-ui,Arial}#game{position:fixed;inset:0}canvas{display:block}
+#hud{position:fixed;inset:0;padding:12px;pointer-events:none}.top{display:flex;justify-content:space-between;gap:8px}.panel{background:#071827d9;border:1px solid #65eaff66;border-radius:13px;padding:9px 12px;backdrop-filter:blur(8px);box-shadow:0 0 18px #00c8ff22}.brand{font-weight:1000;letter-spacing:1.5px;color:#8cf3ff}.tiny{font-size:11px;color:#b4d0df}#speed{font-size:27px;font-weight:950;line-height:1}
+#bottom{position:fixed;bottom:12px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:end;pointer-events:none}#steer,#pedals{display:flex;gap:8px;pointer-events:auto}.ctrl{width:60px;height:62px;border:1px solid #83eaff88;border-radius:16px;background:#09243bdd;color:white;font-size:23px;font-weight:900;touch-action:none}.pedal{width:62px;height:72px;border:1px solid #8bffe088;border-radius:16px;background:#06443ddd;color:#eafffa;font-weight:900;touch-action:none}.boost{background:#542b79dd;border-color:#e5a7ff}
+#menu{position:fixed;inset:0;z-index:5;background:radial-gradient(ellipse,#17445bdf,#030914f5);display:grid;place-items:center;padding:14px}.card{width:min(550px,100%);max-height:95vh;overflow:auto;background:linear-gradient(145deg,#0c2034f5,#101326f5);border:1px solid #6deaff88;border-radius:22px;padding:20px;box-shadow:0 0 50px #00bfff33;text-align:center}h1{font-size:clamp(25px,7vw,39px);margin:0;color:#9bf5ff;letter-spacing:1px}.sub{font-size:13px;color:#bed6e1;margin:5px 0 14px}.field{width:100%;padding:12px;border-radius:10px;border:1px solid #4e94ac;background:#071827;color:white;margin:5px 0;font-size:15px}.btn{padding:12px 15px;border-radius:11px;border:1px solid #77eaff99;background:#103b55;color:white;font-weight:850;font-size:15px}.primary{width:100%;background:linear-gradient(90deg,#00a6c8,#6555d9);margin-top:8px}.row{display:flex;gap:8px}.row>*{flex:1}.status{font-size:12px;color:#a7d9e8;min-height:18px;margin:8px}.divider{height:1px;background:#47748a55;margin:13px 0}.help{font-size:11px;color:#9bb9c9;line-height:1.5;text-align:left}
+#toast{position:fixed;top:75px;left:50%;transform:translateX(-50%);z-index:4;background:#081d2bea;border:1px solid #75eaff77;border-radius:20px;padding:7px 12px;font-size:12px;pointer-events:none}
+@media(min-width:800px){.ctrl{width:68px;height:68px}.pedal{width:72px;height:82px}}
+</style>
+</head>
+<body><div id="game"></div>
+<div id="hud"><div class="top"><div class="panel"><div class="brand">NEON MOTOR CITY ONLINE</div><div class="tiny" id="roomLabel">FREE ROAM • SOLO</div></div><div class="panel" style="text-align:right"><div id="speed">000</div><div class="tiny">KM/H</div></div></div></div>
+<div id="toast">Explore the city • Find the glowing road</div>
+<div id="bottom"><div id="steer"><button class="ctrl" id="left">◀</button><button class="ctrl" id="right">▶</button></div><div id="pedals"><button class="pedal boost" id="boost">BOOST</button><button class="pedal" id="brake">BRAKE</button><button class="pedal" id="gas">GO</button></div></div>
+<div id="menu"><div class="card"><div class="tiny">A BIGGER WORLD. BIGGER RIDES.</div><h1>NEON MOTOR CITY</h1><div class="sub">OPEN WORLD • AI TRAFFIC • ONLINE ROOMS</div>
+<input class="field" id="playerName" maxlength="16" placeholder="Your driver name" value="Driver">
+<input class="field" id="serverUrl" placeholder="Multiplayer server address (wss://...)" />
+<div class="row"><button class="btn" id="solo">PLAY SOLO</button><button class="btn" id="online">CREATE / JOIN ROOM</button></div>
+<input class="field" id="roomCode" maxlength="10" placeholder="Room code (leave blank to create one)">
+<div class="status" id="status">Solo mode works without a server. Online mode needs the game server running.</div>
+<button class="btn primary" id="enter">ENTER CITY</button>
+<div class="divider"></div><div class="help"><b>Controls:</b> Touch the buttons on mobile, or use WASD / arrow keys. Space = boost.<br><b>World:</b> explore a large procedural city, coastal highway, hills, AI traffic and neon landmarks. Multiplayer players appear when connected to the same room.</div>
+</div></div>
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+let scene,camera,renderer,player,clock,started=false,mode='solo',socket=null,room='',myId='',speed=0,steer=0,boost=false,sendClock=0;
+const keys={left:false,right:false,gas:false,brake:false,boost:false},remote=new Map(),ai=[];
+const mats={road:null,white:null,cyan:null};
+const carSpecs=[
+{name:'VOLT XR',color:0x00d9ff,accent:0xeaffff,max:245,handling:1.18},
+{name:'PHANTOM GT',color:0x9b55ff,accent:0xffd8ff,max:275,handling:.95},
+{name:'APEX RUSH',color:0xff4b35,accent:0xffd36b,max:260,handling:1.3}
+];
+const chosen=Math.floor(Math.random()*carSpecs.length);
+function material(color,metal=0,rough=.45,em=0){return new THREE.MeshStandardMaterial({color,metalness:metal,roughness:rough,emissive:color,emissiveIntensity:em})}
+function cube(parent,w,h,d,x,y,z,mat){const o=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);o.position.set(x,y,z);parent.add(o);return o}
+function makeCar(color,accent){
+ const g=new THREE.Group(),paint=material(color,.7,.22,.16),glass=material(0x102a40,.8,.12,.1),rubber=material(0x080d13,.1,.8),glow=material(accent,.3,.2,.9);
+ cube(g,1.9,.48,3.9,0,.65,0,paint);cube(g,1.48,.55,1.8,0,1.05,-.2,glass);
+ cube(g,1.95,.12,.7,0,.78,-1.55,paint);cube(g,2,.13,.42,0,.94,1.72,glow);
+ for(const x of [-.99,.99])for(const z of [-1.2,1.25]){const w=new THREE.Mesh(new THREE.CylinderGeometry(.38,.38,.23,20),rubber);w.rotation.z=Math.PI/2;w.position.set(x,.4,z);g.add(w);const h=new THREE.Mesh(new THREE.CylinderGeometry(.17,.17,.24,16),glow);h.rotation.z=Math.PI/2;h.position.copy(w.position);g.add(h)}
+ cube(g,.55,.14,.07,-.58,.62,-1.97,glow);cube(g,.55,.14,.07,.58,.62,-1.97,glow);
+ cube(g,.6,.16,.08,-.55,.62,1.97,material(0xff2015,0,.3,.8));cube(g,.6,.16,.08,.55,.62,1.97,material(0xff2015,0,.3,.8));
+ return g;
+}
+function building(x,z,w,d,h){
+ const base=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),material([0x14283c,0x202344,0x183447,0x282344][Math.floor(Math.random()*4)],.35,.65));
+ base.position.set(x,h/2,z);scene.add(base);
+ const win=material(Math.random()>.5?0x00a9d8:0xb04fff,.2,.3,.75);
+ for(let y=2;y<h-1;y+=3)for(let xx=-w/2+1;xx<w/2-1;xx+=2.4){
+  const pane=new THREE.Mesh(new THREE.BoxGeometry(.85,.75,.08),win);pane.position.set(x+xx,y,z-d/2-.05);scene.add(pane);
+ }
+}
+function roadSegment(x,z,w,d,rotation=0){const o=new THREE.Mesh(new THREE.PlaneGeometry(w,d),mats.road);o.rotation.x=-Math.PI/2;o.rotation.z=rotation;o.position.set(x,.015,z);scene.add(o)}
+function initWorld(){
+ scene=new THREE.Scene();scene.background=new THREE.Color(0x081725);scene.fog=new THREE.Fog(0x081725,100,430);
+ camera=new THREE.PerspectiveCamera(66,innerWidth/innerHeight,.1,1000);camera.position.set(0,7,13);
+ renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));renderer.setSize(innerWidth,innerHeight);renderer.shadowMap.enabled=true;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.15;$('game').appendChild(renderer.domElement);
+ scene.add(new THREE.HemisphereLight(0x9bdfff,0x18202b,2.1));const sun=new THREE.DirectionalLight(0xffffff,2.1);sun.position.set(-60,100,50);sun.castShadow=true;scene.add(sun);
+ const ground=new THREE.Mesh(new THREE.PlaneGeometry(1200,1200),material(0x13252b,0,.95));ground.rotation.x=-Math.PI/2;ground.position.y=-.12;scene.add(ground);
+ mats.road=material(0x202a35,0,.9);mats.white=material(0xf4f5d8,0,.5,.12);mats.cyan=material(0x00cfff,.2,.3,.8);
+ // Grid of broad avenues with dashed lane markers
+ for(let k=-4;k<=4;k++){let p=k*70;roadSegment(p,0,15,900);roadSegment(0,p,900,15,Math.PI/2);
+  for(let z=-430;z<450;z+=18){cube(scene,.13,.025,7,p,.035,z,mats.white);cube(scene,.13,.025,7,z,.035,p,mats.white)}
+ }
+ // district blocks, parks, towers, hills and a distant coastal strip
+ for(let gx=-4;gx<=4;gx++)for(let gz=-4;gz<=4;gz++){
+  const cx=gx*70,cz=gz*70;
+  for(let n=0;n<5;n++){let x=cx+(Math.random()-.5)*43,z=cz+(Math.random()-.5)*43;if(Math.abs(x%70)<12||Math.abs(z%70)<12)continue;
+   if(Math.random()<.2){const tree=new THREE.Group();const trunk=new THREE.Mesh(new THREE.CylinderGeometry(.35,.5,3,7),material(0x57412b));trunk.position.y=1.5;tree.add(trunk);const top=new THREE.Mesh(new THREE.SphereGeometry(2.5,8,7),material(0x167b70));top.position.y=4;tree.add(top);tree.position.set(x,0,z);scene.add(tree)}
+   else building(x,z,7+Math.random()*12,7+Math.random()*12,8+Math.random()*38);
+  }
+ }
+ // Hills around city perimeter
+ for(let i=0;i<45;i++){let a=Math.random()*Math.PI*2,r=440+Math.random()*100,h=25+Math.random()*80;const hill=new THREE.Mesh(new THREE.ConeGeometry(22+Math.random()*30,h,7),material(0x183b3d,0,.95));hill.position.set(Math.cos(a)*r,h/2-2,Math.sin(a)*r);scene.add(hill)}
+ // Landmark tower
+ const tower= new THREE.Group();cube(tower,14,100,14,0,50,0,material(0x142c4a,.7,.25));for(let y=8;y<95;y+=8)cube(tower,15,.35,15,0,y,0,material(0x00d9ff,.2,.2,1));tower.position.set(135,0,-140);scene.add(tower);
+ player=makeCar(carSpecs[chosen].color,carSpecs[chosen].accent);player.position.set(0,0,0);scene.add(player);
+ // AI traffic cars, each follows a lane around the city grid
+ for(let i=0;i<18;i++){const spec=carSpecs[i%3],obj=makeCar(spec.color,spec.accent);let axis=i%2, lane=(Math.floor(i/2)%5-2)*70;obj.userData={axis,lane,progress:Math.random()*650-325,dir:i%4<2?1:-1,pace:16+Math.random()*22};scene.add(obj);ai.push(obj)}
+ window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+ clock=new THREE.Clock();animate();
+}
+function bindHold(id,key){const el=$(id);el.addEventListener('pointerdown',e=>{e.preventDefault();keys[key]=true;el.setPointerCapture(e.pointerId)});['pointerup','pointercancel','lostpointercapture'].forEach(ev=>el.addEventListener(ev,()=>keys[key]=false))}
+[['left','left'],['right','right'],['gas','gas'],['brake','brake'],['boost','boost']].forEach(a=>bindHold(...a));
+addEventListener('keydown',e=>{if(['ArrowLeft','a'].includes(e.key))keys.left=true;if(['ArrowRight','d'].includes(e.key))keys.right=true;if(['ArrowUp','w'].includes(e.key))keys.gas=true;if(['ArrowDown','s'].includes(e.key))keys.brake=true;if(e.code==='Space')keys.boost=true});
+addEventListener('keyup',e=>{if(['ArrowLeft','a'].includes(e.key))keys.left=false;if(['ArrowRight','d'].includes(e.key))keys.right=false;if(['ArrowUp','w'].includes(e.key))keys.gas=false;if(['ArrowDown','s'].includes(e.key))keys.brake=false;if(e.code==='Space')keys.boost=false});
+function animate(){
+ requestAnimationFrame(animate);if(!renderer)return;const dt=Math.min(clock.getDelta(),.05);
+ if(started){
+  const spec=carSpecs[chosen],target=keys.gas?spec.max:0;speed+=(target-speed)*(keys.gas?.75*dt:.45*dt);if(keys.brake)speed=Math.max(0,speed-125*dt);if(keys.boost&&speed>5)speed=Math.min(spec.max+65,speed+110*dt);
+  const turn=(keys.left?1:0)-(keys.right?1:0);steer+=(turn-steer)*Math.min(1,dt*8);
+  player.position.x-=steer*(.9+speed/100)*spec.handling*dt;player.position.z-=speed*.075*dt;player.position.x=Math.max(-420,Math.min(420,player.position.x));player.position.z=Math.max(-420,Math.min(420,player.position.z));
+  player.rotation.y=steer*.2;player.rotation.z=-steer*.09;
+  ai.forEach(o=>{let u=o.userData;u.progress+=u.pace*dt*u.dir;if(u.progress>420)u.progress=-420;if(u.progress<-420)u.progress=420;if(u.axis===0){o.position.set(u.lane,0,u.progress);o.rotation.y=u.dir>0?0:Math.PI}else{o.position.set(u.progress,0,u.lane);o.rotation.y=u.dir>0?Math.PI/2:-Math.PI/2}});
+  remote.forEach(r=>{r.mesh.position.lerp(new THREE.Vector3(r.x,r.y||0,r.z),.35);r.mesh.rotation.y=r.rot||0});
+  camera.position.lerp(new THREE.Vector3(player.position.x,6.8,player.position.z+12),.07);camera.lookAt(player.position.x,1,player.position.z-12);
+  $('speed').textContent=String(Math.round(speed)).padStart(3,'0');
+  if(socket&&socket.readyState===1){sendClock+=dt;if(sendClock>.08){sendClock=0;socket.send(JSON.stringify({type:'state',x:player.position.x,y:0,z:player.position.z,rot:player.rotation.y,color:carSpecs[chosen].color,name:$('playerName').value||'Driver'}))}}
+ }
+ if(renderer)renderer.render(scene,camera);
+}
+function connectOnline(){
+ const url=$('serverUrl').value.trim(),name=($('playerName').value||'Driver').slice(0,16),code=$('roomCode').value.trim().toUpperCase();
+ if(!url){$('status').textContent='Enter your hosted WebSocket server address (wss://...) first.';return false}
+ try{socket=new WebSocket(url)}catch(e){$('status').textContent='That server address is not valid.';return false}
+ $('status').textContent='Connecting to multiplayer server…';
+ socket.onopen=()=>{socket.send(JSON.stringify({type:'join',name,room:code}));$('status').textContent='Connected! Joining room…'};
+ socket.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}
+  if(m.type==='joined'){room=m.room;myId=m.id;$('roomLabel').textContent='ONLINE ROOM • '+room;$('status').textContent='Room '+room+' ready. Share this code with friends!';$('roomCode').value=room}
+  if(m.type==='players'){for(const p of m.players){if(p.id===myId)continue;if(!remote.has(p.id)){let mesh=makeCar(Number(p.color)||0x00d9ff,0xffffff);scene.add(mesh);remote.set(p.id,{mesh})}Object.assign(remote.get(p.id),p)}}
+  if(m.type==='left'){const r=remote.get(m.id);if(r){scene.remove(r.mesh);remote.delete(m.id)}}
+  if(m.type==='error')$('status').textContent=m.message;
+ };
+ socket.onclose=()=>{if(mode==='online')$('status').textContent='Server disconnected. You can still drive solo.'};
+ socket.onerror=()=>$('status').textContent='Could not reach server. Check the server URL and try again.';
+ return true;
+}
+$('solo').onclick=()=>{mode='solo';$('status').textContent='Solo mode selected.';$('roomLabel').textContent='FREE ROAM • SOLO'};
+$('online').onclick=()=>{mode='online';connectOnline()};
+$('enter').onclick=()=>{if(mode==='online'&&(!socket||socket.readyState!==1)){if(!connectOnline())return;setTimeout(()=>{if(socket&&socket.readyState===1)startGame()},700);return}startGame()};
+function startGame(){if(!scene)initWorld();$('menu').style.display='none';started=true}
+})();
+</script></body></html>
